@@ -102,7 +102,6 @@ class Monitor {
 class Delegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var item: NSStatusItem!
     var timer: Timer?
-    var frame = 0
     let monitor = Monitor(root: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex").appendingPathComponent("sessions"))
     func applicationDidFinishLaunching(_ notification: Notification) {
         if NSRunningApplication.runningApplications(withBundleIdentifier: "local.codex.activity").count > 1 { NSApp.terminate(nil); return }
@@ -141,13 +140,12 @@ class Delegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quitItem.target = self; menu.addItem(quitItem)
     }
     func update() {
-        monitor.poll(); frame += 1
+        monitor.poll()
         let (title, color, count) = monitor.status()
         item.button?.title = count > 0 ? " \(count)" : ""
         item.button?.toolTip = title
         item.button?.setAccessibilityLabel(title)
         // Native code mark: crisp chevrons with a separate colored activity light.
-        let pulse = color == .systemGreen && frame % 2 == 0 ? 0.65 : 1.0
         let icon = NSImage(size: NSSize(width: 25, height: 22), flipped: false) { _ in
             NSColor.labelColor.setStroke()
             let path = NSBezierPath(); path.lineWidth = 1.65
@@ -157,7 +155,7 @@ class Delegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             path.move(to: NSPoint(x: 12.5, y: 17)); path.line(to: NSPoint(x: 9.5, y: 5)); path.stroke()
             NSColor.windowBackgroundColor.setFill()
             NSBezierPath(ovalIn: NSRect(x: 17, y: 1, width: 8, height: 8)).fill()
-            color.withAlphaComponent(pulse).setFill()
+            color.setFill()
             NSBezierPath(ovalIn: NSRect(x: 18, y: 2, width: 6, height: 6)).fill()
             return true
         }
