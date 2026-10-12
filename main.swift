@@ -107,7 +107,7 @@ class ChatMonitor {
     var unknown = true
     static func isStopButton(role: String, labels: [String]) -> Bool {
         guard role == kAXButtonRole as String else { return false }
-        let names = ["stop generating", "stop generation", "stop response", "停止生成", "停止生成回复", "停止回复", "停止响应"]
+        let names = ["stop", "停止", "stop generating", "stop generation", "stop response", "停止生成", "停止生成回复", "停止回复", "停止响应"]
         return labels.contains { names.contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
     }
     func attribute(_ node: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -233,6 +233,8 @@ if CommandLine.arguments.contains("--check") {
     monitor.poll(); print(monitor.status().0); exit(monitor.readable ? 0 : 1)
 }
 if CommandLine.arguments.contains("--self-test") {
+    assert(ChatMonitor.isStopButton(role: "AXButton", labels: ["停止"]))
+    assert(ChatMonitor.isStopButton(role: "AXButton", labels: ["Stop"]))
     assert(ChatMonitor.isStopButton(role: "AXButton", labels: ["停止生成"]))
     assert(ChatMonitor.isStopButton(role: "AXButton", labels: ["Stop generating"]))
     assert(!ChatMonitor.isStopButton(role: "AXStaticText", labels: ["Stop generating"]))
