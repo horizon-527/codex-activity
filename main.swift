@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import SQLite3
 
 struct Sample {
@@ -100,65 +99,9 @@ class Monitor {
         return ("Codex 空闲 · 没有检测到进行中的任务", .systemPurple, 0)
     }
 }
-// Read only button labels; never read message values or perform UI actions.
-class ChatMonitor {
-    var text = "ChatGPT：尚未检测"
-    var generating = false
-    var unknown = true
-    static func isStopButton(role: String, labels: [String]) -> Bool {
-        guard role == kAXButtonRole as String else { return false }
-        let names = ["stop generating", "stop generation", "stop response", "停止生成", "停止生成回复", "停止回复", "停止响应"]
-        return labels.contains { names.contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
-    }
-    func attribute(_ node: AXUIElement, _ name: String) -> CFTypeRef? {
-        var value: CFTypeRef?
-        return AXUIElementCopyAttributeValue(node, name as CFString, &value) == .success ? value : nil
-    }
-    func poll() {
-        generating = false; unknown = false
-        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.codex") + NSRunningApplication.runningApplications(withBundleIdentifier: "com.openai.chat")
-        guard !apps.isEmpty else { text = "ChatGPT：未运行"; return }
-        guard AXIsProcessTrusted() else { unknown = true; text = "ChatGPT：需要辅助功能授权"; return }
-        var windowsSeen = 0
-        for app in apps {
-            let root = AXUIElementCreateApplication(app.processIdentifier)
-            AXUIElementSetMessagingTimeout(root, 0.15)
-            guard let windows = attribute(root, kAXWindowsAttribute) as? [AXUIElement] else { unknown = true; continue }
-            windowsSeen += windows.count
-            for window in windows {
-                var stack = [window]; var visited = 0
-                let deadline = Date().addingTimeInterval(0.25)
-                while let node = stack.popLast() {
-                    visited += 1
-                    if visited > 2500 || Date() > deadline { unknown = true; break }
-                    let role = attribute(node, kAXRoleAttribute) as? String ?? ""
-                    if role == kAXButtonRole as String {
-                        let labels = [kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute].compactMap { attribute(node, $0) as? String }
-                        if Self.isStopButton(role: role, labels: labels), (attribute(node, kAXEnabledAttribute) as? Bool) != false {
-                            generating = true; text = "ChatGPT：正在生成回复"; return
-                        }
-                    }
-                    // Skip editable text and its children; message content is never requested.
-                    if role != kAXTextAreaRole as String, role != kAXTextFieldRole as String {
-                        if let children = attribute(node, kAXChildrenAttribute) as? [AXUIElement] { stack.append(contentsOf: children) }
-                    }
-                }
-            }
-        }
-        if windowsSeen == 0 { unknown = true }
-        text = unknown ? "ChatGPT：无法确定生成状态" : "ChatGPT：当前窗口未检测到生成"
-    }
-}
 class Delegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var item: NSStatusItem!
     var timer: Timer?
-    let chat = ChatMonitor()
-    func combinedStatus() -> (String, NSColor, Int) {
-        let local = monitor.status()
-        if chat.generating { return (chat.text + " · Codex 未结束会话 \(local.2)", .systemGreen, local.2 + 1) }
-        if chat.unknown && local.2 == 0 { return (chat.text, .systemOrange, 0) }
-        return local
-    }
     let monitor = Monitor(root: URL(fileURLWithPath: ProcessInfo.processInfo.environment["CODEX_HOME"] ?? NSHomeDirectory() + "/.codex").appendingPathComponent("sessions"))
     func applicationDidFinishLaunching(_ notification: Notification) {
         if NSRunningApplication.runningApplications(withBundleIdentifier: "local.codex.activity").count > 1 { NSApp.terminate(nil); return }
@@ -170,15 +113,12 @@ class Delegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.update() }
         RunLoop.main.add(timer!, forMode: .common)
     }
-    func menuWillOpen(_ menu: NSMenu) { rebuildMenu() }
+    func menuWillOpen(_ menu: NSMenu) { monitor.poll(); rebuildMenu() }
     func rebuildMenu() {
         guard let menu = item.menu else { return }
         menu.removeAllItems()
         menu.addItem(NSMenuItem(title: "Codex · 会话活动", action: nil, keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: combinedStatus().0, action: nil, keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: chat.text, action: nil, keyEquivalent: ""))
-        let permission = NSMenuItem(title: "授权 ChatGPT 状态检测…", action: #selector(authorizeChat), keyEquivalent: "")
-        permission.target = self; menu.addItem(permission)
+        menu.addItem(NSMenuItem(title: monitor.status().0, action: nil, keyEquivalent: ""))
         let active = monitor.activeSessions
         if !active.isEmpty {
             menu.addItem(.separator())
@@ -200,8 +140,8 @@ class Delegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         quitItem.target = self; menu.addItem(quitItem)
     }
     func update() {
-        monitor.poll(); chat.poll()
-        let (title, color, count) = combinedStatus()
+        monitor.poll()
+        let (title, color, count) = monitor.status()
         item.button?.title = count > 0 ? " \(count)" : ""
         item.button?.toolTip = title
         item.button?.setAccessibilityLabel(title)
@@ -221,11 +161,6 @@ class Delegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         icon.isTemplate = false; item.button?.image = icon
     }
-    @objc func authorizeChat() {
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(url) }
-    }
     @objc func quit() { NSApp.terminate(nil) }
 }
 if CommandLine.arguments.contains("--check") {
@@ -233,10 +168,6 @@ if CommandLine.arguments.contains("--check") {
     monitor.poll(); print(monitor.status().0); exit(monitor.readable ? 0 : 1)
 }
 if CommandLine.arguments.contains("--self-test") {
-    assert(ChatMonitor.isStopButton(role: "AXButton", labels: ["停止生成"]))
-    assert(ChatMonitor.isStopButton(role: "AXButton", labels: ["Stop generating"]))
-    assert(!ChatMonitor.isStopButton(role: "AXStaticText", labels: ["Stop generating"]))
-    assert(!ChatMonitor.isStopButton(role: "AXButton", labels: ["停止录音"]))
     var s = Sample()
     func event(_ type: String, _ id: String) -> Data { try! JSONSerialization.data(withJSONObject: ["type":"event_msg", "payload":["type":type,"turn_id":id]]) }
     s.consume(event("task_started", "a")); assert(s.active)
